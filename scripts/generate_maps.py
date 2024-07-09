@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.patches import Patch
 from matplotlib_scalebar.scalebar import ScaleBar
-from shapely.geometry import LineString, MultiPoint, Point
+from shapely.geometry import LineString, MultiPoint, Point, Polygon, box
 
 
 def calculate_distance(geometry):
@@ -31,6 +31,17 @@ def determine_availability(row):
         return 'outdated'
 
 def plot_data_on_basemap(basemap, gdf, institution, filename, output_folder):
+    # Define the colors for the categories
+    category_colors = {
+        'Ocean': '#a3bdd1',  # Correct blue color for ocean
+        'Ice shelf': '#cfe1eb',
+        'Land': '#f0f0f0',
+        'Sub-antarctic_G': 'lightgreen',
+        'Sub-antarctic_L': 'lightblue',
+        'Ice tongue': 'lightgrey',
+        'Rumple': 'yellow',
+    }
+
     fig, ax = plt.subplots(figsize=(10, 10))
 
     # Set background color to white
@@ -38,7 +49,38 @@ def plot_data_on_basemap(basemap, gdf, institution, filename, output_folder):
     ax.set_facecolor('white')
 
     # Plot basemap with custom colors
-    basemap.plot(ax=ax, color=basemap['color'], edgecolor='black')
+    basemap['color'] = basemap['Category'].map(category_colors)
+
+    # Split basemap into inside and outside the circle
+    center = Point(0, 0)
+    radius = 3e6
+    circle_poly = center.buffer(radius)
+
+    inside_circle = basemap[basemap.geometry.intersects(circle_poly)]
+    outside_circle = basemap[~basemap.geometry.intersects(circle_poly)]
+
+    # Plot the 'Ocean' category differently inside and outside the circle
+    for category, color in category_colors.items():
+        inside = inside_circle[inside_circle['Category'] == category]
+        outside = outside_circle[outside_circle['Category'] == category]
+
+        # Inside circle: plot with original color
+        if not inside.empty:
+            if category == 'Ocean':
+                inside.plot(ax=ax, color=color, edgecolor='black')
+            else:
+                inside.plot(ax=ax, color=color, edgecolor='black')
+
+        # Outside circle: plot with white color for 'Ocean'
+        if not outside.empty:
+            if category == 'Ocean':
+                outside.plot(ax=ax, color='white', edgecolor='black')
+            else:
+                outside.plot(ax=ax, color=color, edgecolor='black')
+
+    # Debug: print basemap information
+    print("Basemap categories and colors:")
+    print(basemap[['Category', 'color']].drop_duplicates())
 
     # Define colors and labels based on availability
     availability_colors = {'u': '#fb9a99', 's': '#1f78bc', 'o': 'grey'}
@@ -53,6 +95,10 @@ def plot_data_on_basemap(basemap, gdf, institution, filename, output_folder):
                 label = availability_labels.get(availability, 'Other')
                 subset.plot(ax=ax, color=color, markersize=0.55, linewidth=0.25, label=label)
 
+    # Debug: print GeoDataFrame information
+    print("Institution GeoDataFrame:")
+    print(gdf.head())
+
     # Set limits to zoom in on Antarctica
     ax.set_xlim(-3e6, 3e6)
     ax.set_ylim(-3e6, 3e6)
@@ -61,12 +107,18 @@ def plot_data_on_basemap(basemap, gdf, institution, filename, output_folder):
     ax.set_aspect('equal')
     ax.axis('off')
 
-    # Add custom scale bar with "1000 km" label only
-    scalebar = ScaleBar(1, location='lower right', units='km', dimension='si-length', label='1000 km', length_fraction=0.2)
-    scalebar.dx = 1  # Set the distance to 1 unit of whatever is specified (km in this case)
-    scalebar.label = '1000 km'  # Custom label
+    # Add a custom scale bar
+    scalebar_length_km = 1000  # Length of scale bar in kilometers
+    scalebar_length_m = scalebar_length_km * 1000  # Convert to meters
 
-    ax.add_artist(scalebar)
+    # Calculate the position and draw the scale bar
+    scalebar_x = -2.5e6
+    scalebar_y = -2.8e6
+    ax.plot([scalebar_x, scalebar_x + scalebar_length_m], [scalebar_y, scalebar_y], color='black', lw=2)
+    ax.text(scalebar_x + scalebar_length_m / 2, scalebar_y - 2e5, f'{scalebar_length_km} km', ha='center', va='top')
+
+
+
 
     plt.title(f'{institution} Data Availability', fontsize=14)
 
@@ -75,7 +127,18 @@ def plot_data_on_basemap(basemap, gdf, institution, filename, output_folder):
     ax.legend(handles=legend_patches, loc='upper right', fontsize=8, title='Availability')
 
     # Draw a circular boundary
-    circle = plt.Circle((0, 0), 3e6, transform=ax.transData, color='black', fill=False, linewidth=1)
+    bbox_size = 3.5e6  # Adjusted to cover entire plotting area
+    bbox = box(-bbox_size, -bbox_size, bbox_size, bbox_size)
+
+    # Create the mask polygon with the bounding box as the outer boundary and the circle as a hole
+    mask = Polygon(bbox.exterior.coords, [circle_poly.exterior.coords])
+
+    # Convert the mask to a matplotlib patch
+    mask_patch = plt.Polygon(list(mask.exterior.coords) + list(mask.interiors[0].coords), closed=True, facecolor='white', edgecolor='none')
+    ax.add_patch(mask_patch)
+
+    # Draw the circle outline again
+    circle = plt.Circle((0, 0), radius, facecolor='none', edgecolor='black', linewidth=1)
     ax.add_artist(circle)
 
     # Save the plot to the data folder
